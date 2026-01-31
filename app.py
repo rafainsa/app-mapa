@@ -2,99 +2,99 @@ import streamlit as st
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
-import os  # Necesario para verificar archivos
+import os
 
-# 1. Configuración de la Interfaz
-st.set_page_config(page_title="Generador de Mapas España", layout="wide")
-st.title("🗺️ Generador de Mapas de Coropletas: España")
-st.sidebar.header("Configuración del Mapa")
+# 1. Configuración de la página
+st.set_page_config(page_title="App Mapas España - Datos Estadísticos", layout="wide")
 
-# 2. Carga de Geometrías (Archivo Local corregido)
+# 2. Función para cargar el mapa (Archivo GeoJSON local)
 @st.cache_data
 def load_data():
     nombre_archivo = "spain-communities.geojson"
-    
     if os.path.exists(nombre_archivo):
-        # CORRECCIÓN: Usar la variable nombre_archivo entre comillas
-        gdf = gpd.read_file(nombre_archivo)
-        return gdf
+        try:
+            # Usamos el motor fiona por estabilidad
+            gdf = gpd.read_file(nombre_archivo, engine='fiona')
+            return gdf
+        except:
+            return gpd.read_file(nombre_archivo)
     else:
-        st.error(f"No se encontró el archivo '{nombre_archivo}' en el repositorio.")
+        st.error(f"❌ No se encuentra el archivo '{nombre_archivo}'.")
         return None
 
 gdf = load_data()
 
-# Solo continuamos si el mapa se cargó correctamente
 if gdf is not None:
-    # 3. Entrada de Datos
+    st.title("🗺️ Generador de Mapas Estadísticos de España")
+    st.markdown("Crea mapas de coropletas basados en intervalos numéricos.")
+
+    # --- BLOQUE 1: ENTRADA DE DATOS NUMÉRICOS ---
     st.subheader("1. Introducción de Datos")
-    st.write("Introduce los valores para las 17 CCAA y 2 Ciudades Autónomas.")
-
-    # Aseguramos nombres consistentes
+    
+    # Extraer nombres de las CCAA
     comunidades = sorted(gdf['name'].unique())
-    data_input = pd.DataFrame({'Comunidad': comunidades, 'Valor': [0.0]*len(comunidades)})
-    edited_df = st.data_editor(data_input, num_rows="fixed", use_container_width=True)
+    df_base = pd.DataFrame({'Comunidad': comunidades, 'Valor': [0.0]*len(comunidades)})
+    
+    st.write("Introduce los datos numéricos en la tabla:")
+    edited_df = st.data_editor(df_base, use_container_width=True, hide_index=True)
 
-    # 4. Procesamiento de Datos (Relativos vs Absolutos)
-    tipo_dato = st.radio("¿Cómo son los datos introducidos?", ["Ya son Relativos", "Son Absolutos (Calcular)"])
-
-    if tipo_dato == "Son Absolutos (Calcular)":
-        poblacion_total = st.number_input("Valor total de referencia (ej. Población total)", min_value=0.1, value=100.0)
-        edited_df['Valor_Final'] = (edited_df['Valor'] / poblacion_total) * 100
-        unidad = "%"
+    # --- BLOQUE 2: PROCESAMIENTO ESTADÍSTICO ---
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        tipo_valor = st.radio("Tipo de dato:", ["Valor Relativo (%)", "Valor Absoluto (Calcular %)"])
+    
+    if tipo_valor == "Valor Absoluto (Calcular %)":
+        with col2:
+            total_ref = st.number_input("Total de referencia (ej. Población total):", min_value=0.01, value=100.0)
+            edited_df['Valor_Final'] = (edited_df['Valor'] / total_ref) * 100
+            unidad_label = "% (Calculado)"
     else:
-        # Aquí permitimos que sean números o texto (como códigos Koeppen)
         edited_df['Valor_Final'] = edited_df['Valor']
-        unidad = st.text_input("Unidad de medida (ej. hab/km², %)", "%")
+        with col2:
+            unidad_label = st.text_input("Unidad de medida:", "%")
 
-    # 5. Diseño del Mapa
-    st.subheader("2. Elementos del Mapa")
+    # --- BLOQUE 3: DISEÑO DEL MAPA ---
+    st.subheader("2. Estética y Elementos del Mapa")
     col_a, col_b = st.columns(2)
+    
     with col_a:
-        titulo = st.text_input("Título del Mapa", "Distribución de Variable en España")
+        titulo_mapa = st.text_input("Título del Mapa:", "Mapa de Distribución")
+        color_familia = st.selectbox("Gama de colores:", ["Blues", "Reds", "Greens", "Purples", "Oranges", "YlOrBr"])
+    
     with col_b:
-        color_base = st.selectbox("Familia cromática (Oscuro = Mayor valor)", ["Blues", "Reds", "Greens", "Purples", "Oranges", "YlOrBr"])
+        st.info("El mapa dividirá los datos en 4 intervalos automáticos para un análisis claro.")
 
-    # Botón para generar
-    if st.button("🎨 Generar Mapa"):
-        # Unión de datos
-        merged = gdf.set_index('name').join(edited_df.set_index('Comunidad'))
+    # --- BLOQUE 4: RENDERIZADO DEL MAPA ---
+    if st.button("🚀 Generar Mapa"):
+        # Unir datos con el mapa
+        merged = gdf.merge(edited_df, left_on="name", right_on="Comunidad")
         
-        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        fig, ax = plt.subplots(1, 1, figsize=(12, 9))
         
-        # Intentamos clasificación numérica (máximo 4 intervalos)
-        try:
-            merged.plot(column='Valor_Final', 
-                        cmap=color_base, 
-                        scheme='NaturalBreaks', 
-                        k=4, 
-                        ax=ax, 
-                        edgecolor='0.3', 
-                        linewidth=0.5,
-                        legend=True,
-                        legend_kwds={'loc': 'lower right', 'title': f"Intervalos ({unidad})"})
-        except:
-            # Si los datos son texto (ej: Csa, Csb), se dibujan como categorías
-            merged.plot(column='Valor_Final', 
-                        cmap=color_base, 
-                        ax=ax, 
-                        edgecolor='0.3', 
-                        linewidth=0.5,
-                        legend=True,
-                        legend_kwds={'loc': 'lower right', 'title': "Categorías"})
+        # Clasificación obligatoria en 4 intervalos numéricos
+        merged.plot(column='Valor_Final', 
+                    cmap=color_familia, 
+                    scheme='NaturalBreaks', 
+                    k=4, 
+                    ax=ax, 
+                    edgecolor='black', 
+                    linewidth=0.5,
+                    legend=True,
+                    legend_kwds={'loc': 'lower right', 'title': f"Intervalos ({unidad_label})"})
 
-        # Elementos esenciales
-        ax.set_title(titulo, fontsize=18, pad=20)
+        # Título y limpieza de ejes
+        ax.set_title(titulo_mapa, fontsize=20, pad=15)
         ax.axis('off')
         
-        # Indicación del Norte
-        x, y, arrow_length = 0.05, 0.95, 0.08
-        ax.annotate('N', xy=(x, y), xytext=(x, y-arrow_length),
+        # Flecha del Norte
+        ax.annotate('N', xy=(0.05, 0.95), xytext=(0.05, 0.88),
                     arrowprops=dict(facecolor='black', width=3, headwidth=10),
                     ha='center', va='center', fontsize=15, xycoords='axes fraction')
         
-        # Escala
-        ax.text(0.1, 0.05, "Escala 1:10.000.000 (Aprox)\nSistema de Referencia: ETRS89", 
-                transform=ax.transAxes, fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
-
+        # Escala Gráfica
+        ax.text(0.05, 0.05, "0 __________ 250 km\nEscala 1:10.000.000", 
+                transform=ax.transAxes, fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Mostrar resultado
         st.pyplot(fig)
