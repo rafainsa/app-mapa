@@ -1,6 +1,0 @@
-streamlit
-geopandas
-matplotlib
-mapclassify
-fiona
-pyproj
