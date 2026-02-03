@@ -3,85 +3,96 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
 
-st.set_page_config(page_title="Generador de Mapas Coropléticos", layout="wide")
+st.set_page_config(page_title="Generador de Mapas Temáticos", layout="wide")
 
 @st.cache_data
 def load_and_move_canarias():
-    # URL del GeoJSON de comunidades autónomas
     url = "https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/spain-communities.geojson"
     gdf = gpd.read_file(url)
-    
-    # --- Lógica para desplazar Canarias ---
     canarias = gdf[gdf['name'] == 'Canarias'].copy()
     peninsula = gdf[gdf['name'] != 'Canarias'].copy()
-    
-    # Desplazamiento geométrico para que aparezcan cerca de la península
-    # xoff: mueve horizontalmente, yoff: mueve verticalmente
     canarias['geometry'] = canarias['geometry'].translate(xoff=5.5, yoff=7.5)
-    
     return pd.concat([peninsula, canarias])
 
 gdf = load_and_move_canarias()
 
 if gdf is not None:
     st.title("🗺️ Diseñador de Mapas Temáticos de España")
-    st.markdown("Herramienta avanzada para la representación de datos espaciales.")
     
-    # --- 1. ENTRADA DE DATOS ---
-    st.subheader("1. Tabla de Datos")
+    # --- 1. CONFIGURACIÓN DE DATOS ---
+    st.subheader("1. Entrada de datos")
+    tipo_entrada = st.radio(
+        "¿Cómo vas a introducir los datos?",
+        ["Tengo el dato relativo (%, densidad, tasa)", "Tengo datos absolutos (requiere cálculo)"],
+        horizontal=True
+    )
+
     comunidades = sorted(gdf['name'].unique())
-    df_base = pd.DataFrame({'Comunidad': comunidades, 'Dato_Origen': [0.0]*len(comunidades)})
     
-    st.info("Introduce los datos en la columna 'Dato_Origen'.")
-    edited_df = st.data_editor(df_base, use_container_width=True, hide_index=True)
+    if tipo_entrada == "Tengo el dato relativo (%, densidad, tasa)":
+        df_input = pd.DataFrame({'Comunidad': comunidades, 'Valor Relativo': [0.0]*len(comunidades)})
+        edited_df = st.data_editor(df_input, use_container_width=True, hide_index=True)
+        edited_df['Resultado_Final'] = edited_df['Valor Relativo']
+        label_unidad = st.text_input("Etiqueta de unidad (ej. %, hab/km²):", "%")
 
-    # --- 2. TRATAMIENTO ESTADÍSTICO (RELATIVOS VS ABSOLUTOS) ---
-    st.divider()
-    st.subheader("2. Tratamiento de los Datos")
-    
-    tipo_dato = st.radio("Naturaleza del dato introducido:", 
-                         ["Dato Relativo (ya es una tasa o %)", "Dato Absoluto (necesita conversión)"])
-    
-    if tipo_dato == "Dato Absoluto (necesita conversión)":
-        col_calc1, col_calc2 = st.columns(2)
-        with col_calc1:
-            divisor = st.number_input("Valor de referencia (Divisor):", 
-                                      min_value=0.0001, value=1.0, 
-                                      help="Suele ser la población total o superficie total.")
-        with col_calc2:
-            multiplicador = st.number_input("Multiplicador ajustable (K):", 
-                                            value=100, 
-                                            help="Usa 100 para %, 1.000 para tasas por mil, etc.")
-        
-        # Fórmula: (Valor / Referencia) * K
-        edited_df['Valor_Final'] = (edited_df['Dato_Origen'] / divisor) * multiplicador
-        st.caption(f"Fórmula aplicada: (Dato / {divisor}) * {multiplicador}")
-        label_unidad = f"Tasa (K={multiplicador})"
     else:
-        edited_df['Valor_Final'] = edited_df['Dato_Origen']
-        label_unidad = st.text_input("Unidad de medida (ej. %, hab/km²):", "%")
-
-    # --- 3. DISEÑO Y REPRESENTACIÓN ---
-    st.divider()
-    st.subheader("3. Configuración Visual")
-    col1, col2 = st.columns(2)
-    with col1:
-        titulo = st.text_input("Título del mapa:", "Distribución Geográfica")
-        paleta = st.selectbox("Gama de colores:", ["Blues", "Reds", "YlOrBr", "Purples", "Greens"])
-    with col2:
-        st.write("**Clasificación:**")
-        st.write("- Método: Natural Breaks (Jenks)")
-        st.write("- Intervalos: 4 (Máximo recomendado)")
-
-    # --- 4. GENERACIÓN DEL MAPA ---
-    if st.button("🎨 Generar y Visualizar Mapa"):
-        # Unir datos con geometría
-        merged = gdf.merge(edited_df, left_on="name", right_on="Comunidad")
+        # Modo cálculo avanzado
+        col_calc_a, col_calc_b = st.columns(2)
+        with col_calc_a:
+            col_n1 = st.text_input("Nombre Variable A:", "Variable A")
+            col_n2 = st.text_input("Nombre Variable B:", "Variable B")
+        with col_calc_b:
+            operacion = st.selectbox("Operación a realizar:", [
+                "Tasa: (A / B) * Multiplicador",
+                "Dividir: (A / B)",
+                "Multiplicar: (A * B)",
+                "Diferencia porcentual: ((A - B) / B) * 100",
+                "Suma simple: (A + B)"
+            ])
+            multiplicador = st.number_input("Multiplicador (K):", value=1000 if "Tasa" in operacion else 1)
         
+        df_input = pd.DataFrame({
+            'Comunidad': comunidades, 
+            col_n1: [0.0]*len(comunidades),
+            col_n2: [1.0]*len(comunidades)
+        })
+        
+        edited_df = st.data_editor(df_input, use_container_width=True, hide_index=True)
+        
+        # --- LÓGICA DE CÁLCULO ---
+        if "Tasa" in operacion:
+            edited_df['Resultado_Final'] = (edited_df[col_n1] / edited_df[col_n2]) * multiplicador
+            f_text = f"({col_n1} / {col_n2}) * {multiplicador}"
+        elif "Dividir" in operacion:
+            edited_df['Resultado_Final'] = edited_df[col_n1] / edited_df[col_n2]
+            f_text = f"{col_n1} / {col_n2}"
+        elif "Multiplicar" in operacion:
+            edited_df['Resultado_Final'] = edited_df[col_n1] * edited_df[col_n2]
+            f_text = f"{col_n1} * {col_n2}"
+        elif "Diferencia" in operacion:
+            edited_df['Resultado_Final'] = ((edited_df[col_n1] - edited_df[col_n2]) / edited_df[col_n2]) * 100
+            f_text = f"(({col_n1} - {col_n2}) / {col_n2}) * 100"
+        else:
+            edited_df['Resultado_Final'] = edited_df[col_n1] + edited_df[col_n2]
+            f_text = f"{col_n1} + {col_n2}"
+            
+        st.success(f"Fórmula aplicada: {f_text}")
+        label_unidad = st.text_input("Unidad para la leyenda:", "Resultado")
+
+    # --- 2. DISEÑO Y MAPA ---
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        titulo = st.text_input("Título del mapa:", "Mapa Temático")
+        paleta = st.selectbox("Gama cromática:", ["Blues", "Reds", "YlOrBr", "Purples", "Greens"])
+    with c2:
+        st.info("Intervalos: 4 (Natural Breaks / Jenks)")
+
+    if st.button("🎨 Generar Mapa"):
+        merged = gdf.merge(edited_df, left_on="name", right_on="Comunidad")
         fig, ax = plt.subplots(1, 1, figsize=(12, 8))
         
-        # Mapa coroplético
-        merged.plot(column='Valor_Final', 
+        merged.plot(column='Resultado_Final', 
                     cmap=paleta, 
                     scheme='NaturalBreaks', 
                     k=4, 
@@ -89,26 +100,18 @@ if gdf is not None:
                     edgecolor='black', 
                     linewidth=0.5,
                     legend=True,
-                    legend_kwds={'loc': 'lower right', 'title': f"Unidades: {label_unidad}"})
+                    legend_kwds={'loc': 'lower right', 'title': label_unidad})
 
-        # Estética final
-        ax.set_title(titulo, fontsize=22, pad=20)
+        ax.set_title(titulo, fontsize=20, pad=20)
         
-        # Indicador de Canarias
-        ax.text(0.1, 0.28, "Canarias\n(desplazadas)", transform=ax.transAxes, 
-                fontsize=9, color='gray', style='italic', ha='center',
-                bbox=dict(facecolor='white', alpha=0.5, edgecolor='gray', boxstyle='round,pad=0.5'))
-        
-        # Flecha Norte
-        ax.annotate('N', xy=(0.05, 0.95), xytext=(0.05, 0.88),
+        # Elementos cartográficos agrupados arriba a la izquierda
+        ax.annotate('N', xy=(0.06, 0.95), xytext=(0.06, 0.88),
                     arrowprops=dict(facecolor='black', width=3, headwidth=10),
                     ha='center', va='center', fontsize=15, xycoords='axes fraction')
         
-        # Escala Gráfica
-        ax.text(0.05, 0.05, "0 __________ 250 km\nEscala 1:10.000.000", 
-                transform=ax.transAxes, fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
+        ax.text(0.02, 0.82, "0 ________ 250 km\nEscala 1:10.000.000", 
+                transform=ax.transAxes, fontsize=9, 
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         
         ax.axis('off')
-        
-        # Mostrar en Streamlit
         st.pyplot(fig)
